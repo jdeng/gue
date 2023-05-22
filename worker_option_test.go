@@ -36,7 +36,7 @@ func (m *mockLogger) With(fields ...adapter.Field) adapter.Logger {
 }
 
 var dummyWM = WorkMap{
-	"MyJob": func(ctx context.Context, j *Job) error {
+	"MyJob": func(ctx context.Context, j Job) error {
 		return nil
 	},
 }
@@ -215,7 +215,7 @@ type dummyHook struct {
 	counter int
 }
 
-func (h *dummyHook) handler(context.Context, *Job, error) {
+func (h *dummyHook) handler(context.Context, Job, error) {
 	h.counter++
 }
 

@@ -24,27 +24,40 @@ const (
 	JobPriorityLowest  JobPriority = 32767
 )
 
-// Job is a single unit of work for Gue to perform.
-type Job struct {
-	// ID is the unique database ID of the Job. It is ignored on job creation.
-	ID ulid.ULID
+type Job interface {
+	ID() string
+	Type() string
+	Queue() string
+	Priority() JobPriority
+	RunAt() time.Time
 
-	// Queue is the name of the queue. It defaults to the empty queue "".
-	Queue string
+	Tx() adapter.Tx
+	Delete(ctx context.Context) error
+	Done(ctx context.Context) error
+	Error(ctx context.Context, err error) error
+}
 
-	// Priority is the priority of the Job. The default priority is 0, and a
+// BasicJob is a single unit of work for Gue to perform.
+type BasicJob struct {
+	// mID is the unique database mID of the Job. It is ignored on job creation.
+	mID ulid.ULID
+
+	// mQueue is the name of the queue. It defaults to the empty queue "".
+	mQueue string
+
+	// mPriority is the priority of the Job. The default priority is 0, and a
 	// lower number means a higher priority.
 	//
 	// The highest priority is JobPriorityHighest, the lowest one is JobPriorityLowest
-	Priority JobPriority
+	mPriority JobPriority
 
-	// RunAt is the time that this job should be executed. It defaults to now(),
+	// mRunAt is the time that this job should be executed. It defaults to now(),
 	// meaning the job will execute immediately. Set it to a value in the future
 	// to delay a job's execution.
-	RunAt time.Time
+	mRunAt time.Time
 
-	// Type maps job to a worker func.
-	Type string
+	// mType maps job to a worker func.
+	mType string
 
 	// Args for the job.
 	Args []byte
@@ -67,11 +80,31 @@ type Job struct {
 	logger  adapter.Logger
 }
 
+func (j *BasicJob) Type() string {
+	return j.mType
+}
+
+func (j *BasicJob) ID() string {
+	return j.mID.String()
+}
+
+func (j *BasicJob) Queue() string {
+	return j.mQueue
+}
+
+func (j *BasicJob) Priority() JobPriority {
+	return j.mPriority
+}
+
+func (j *BasicJob) RunAt() time.Time {
+	return j.mRunAt
+}
+
 // Tx returns DB transaction that this job is locked to. You may use
 // it as you please until you call Done(). At that point, this transaction
 // will be committed. This function will return nil if the Job's
 // transaction was closed with Done().
-func (j *Job) Tx() adapter.Tx {
+func (j *BasicJob) Tx() adapter.Tx {
 	return j.tx
 }
 
@@ -80,7 +113,7 @@ func (j *Job) Tx() adapter.Tx {
 // You must also later call Done() to return this job's database connection to
 // the pool. If you got the job from the worker - it will take care of cleaning up the job and resources,
 // no need to do this manually in a WorkFunc.
-func (j *Job) Delete(ctx context.Context) error {
+func (j *BasicJob) Delete(ctx context.Context) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
@@ -88,7 +121,7 @@ func (j *Job) Delete(ctx context.Context) error {
 		return nil
 	}
 
-	_, err := j.tx.Exec(ctx, `DELETE FROM gue_jobs WHERE job_id = $1`, j.ID.String())
+	_, err := j.tx.Exec(ctx, `DELETE FROM gue_jobs WHERE job_id = $1`, j.ID())
 	if err != nil {
 		return err
 	}
@@ -99,7 +132,7 @@ func (j *Job) Delete(ctx context.Context) error {
 
 // Done commits transaction that marks job as done. If you got the job from the worker - it will take care of
 // cleaning up the job and resources, no need to do this manually in a WorkFunc.
-func (j *Job) Done(ctx context.Context) error {
+func (j *BasicJob) Done(ctx context.Context) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
@@ -125,7 +158,7 @@ func (j *Job) Done(ctx context.Context) error {
 // so calling Done() is not required, although calling it will not cause any issues.
 // If you got the job from the worker - it will take care of cleaning up the job and resources,
 // no need to do this manually in a WorkFunc.
-func (j *Job) Error(ctx context.Context, jErr error) (err error) {
+func (j *BasicJob) Error(ctx context.Context, jErr error) (err error) {
 	defer func() {
 		doneErr := j.Done(ctx)
 		if doneErr != nil {
@@ -139,8 +172,8 @@ func (j *Job) Error(ctx context.Context, jErr error) (err error) {
 	if newRunAt.IsZero() {
 		j.logger.Info(
 			"Got empty new run at for the errored job, discarding it",
-			adapter.F("job-type", j.Type),
-			adapter.F("job-queue", j.Queue),
+			adapter.F("job-type", j.mType),
+			adapter.F("job-queue", j.mQueue),
 			adapter.F("job-errors", errorCount),
 			adapter.Err(jErr),
 		)
@@ -151,13 +184,13 @@ func (j *Job) Error(ctx context.Context, jErr error) (err error) {
 	_, err = j.tx.Exec(
 		ctx,
 		`UPDATE gue_jobs SET error_count = $1, run_at = $2, last_error = $3, updated_at = $4 WHERE job_id = $5`,
-		errorCount, newRunAt, jErr.Error(), now, j.ID.String(),
+		errorCount, newRunAt, jErr.Error(), now, j.ID(),
 	)
 
 	return err
 }
 
-func (j *Job) calculateErrorRunAt(err error, now time.Time, errorCount int32) time.Time {
+func (j *BasicJob) calculateErrorRunAt(err error, now time.Time, errorCount int32) time.Time {
 	errReschedule, ok := err.(ErrJobReschedule)
 	if ok {
 		return errReschedule.rescheduleJobAt()

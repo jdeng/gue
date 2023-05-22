@@ -63,7 +63,7 @@ func NewClient(pool adapter.ConnPool, options ...ClientOption) (*Client, error) 
 }
 
 // Enqueue adds a job to the queue.
-func (c *Client) Enqueue(ctx context.Context, j *Job) error {
+func (c *Client) Enqueue(ctx context.Context, j *BasicJob) error {
 	return c.execEnqueue(ctx, j, c.pool)
 }
 
@@ -73,12 +73,12 @@ func (c *Client) Enqueue(ctx context.Context, j *Job) error {
 //
 // It is the caller's responsibility to Commit or Rollback the transaction after
 // this function is called.
-func (c *Client) EnqueueTx(ctx context.Context, j *Job, tx adapter.Tx) error {
+func (c *Client) EnqueueTx(ctx context.Context, j *BasicJob, tx adapter.Tx) error {
 	return c.execEnqueue(ctx, j, tx)
 }
 
 // EnqueueBatch adds a batch of jobs. Operation is atomic, so either all jobs are added, or none.
-func (c *Client) EnqueueBatch(ctx context.Context, jobs []*Job) error {
+func (c *Client) EnqueueBatch(ctx context.Context, jobs []*BasicJob) error {
 	tx, err := c.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("could not begin transaction")
@@ -102,7 +102,7 @@ func (c *Client) EnqueueBatch(ctx context.Context, jobs []*Job) error {
 //
 // It is the caller's responsibility to Commit or Rollback the transaction after
 // this function is called.
-func (c *Client) EnqueueBatchTx(ctx context.Context, jobs []*Job, tx adapter.Tx) error {
+func (c *Client) EnqueueBatchTx(ctx context.Context, jobs []*BasicJob, tx adapter.Tx) error {
 	for i, j := range jobs {
 		if err := c.execEnqueue(ctx, j, tx); err != nil {
 			return fmt.Errorf("could not enqueue job from the batch [idx %d]: %w", i, err)
@@ -112,39 +112,39 @@ func (c *Client) EnqueueBatchTx(ctx context.Context, jobs []*Job, tx adapter.Tx)
 	return nil
 }
 
-func (c *Client) execEnqueue(ctx context.Context, j *Job, q adapter.Queryable) (err error) {
-	if j.Type == "" {
+func (c *Client) execEnqueue(ctx context.Context, j *BasicJob, q adapter.Queryable) (err error) {
+	if j.mType == "" {
 		return ErrMissingType
 	}
 
 	now := time.Now().UTC()
 
-	runAt := j.RunAt
+	runAt := j.mRunAt
 	if runAt.IsZero() {
-		j.RunAt = now
+		j.mRunAt = now
 	}
 
 	if j.Args == nil {
 		j.Args = []byte{}
 	}
 
-	if j.ID, err = ulid.New(ulid.Timestamp(now), c.entropy); err != nil {
+	if j.mID, err = ulid.New(ulid.Timestamp(now), c.entropy); err != nil {
 		return fmt.Errorf("could not generate new Job ULID ID: %w", err)
 	}
 	_, err = q.Exec(ctx, `INSERT INTO gue_jobs
 (job_id, queue, priority, run_at, job_type, args, created_at, updated_at)
 VALUES
 ($1, $2, $3, $4, $5, $6, $7, $7)
-`, j.ID.String(), j.Queue, j.Priority, j.RunAt, j.Type, j.Args, now)
+`, j.ID(), j.mQueue, j.mPriority, j.mRunAt, j.mType, j.Args, now)
 
 	c.logger.Debug(
 		"Tried to enqueue a job",
 		adapter.Err(err),
-		adapter.F("queue", j.Queue),
-		adapter.F("id", j.ID.String()),
+		adapter.F("queue", j.mQueue),
+		adapter.F("id", j.ID()),
 	)
 
-	c.mEnqueue.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type), attrSuccess.Bool(err == nil)))
+	c.mEnqueue.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.mType), attrSuccess.Bool(err == nil)))
 
 	return err
 }
@@ -162,7 +162,7 @@ VALUES
 //
 // After the Job has been worked, you must call either Job.Done() or Job.Error() on it
 // in order to commit transaction to persist Job changes (remove or update it).
-func (c *Client) LockJob(ctx context.Context, queue string) (*Job, error) {
+func (c *Client) LockJob(ctx context.Context, queue string) (Job, error) {
 	sql := `SELECT job_id, queue, priority, run_at, job_type, args, error_count, last_error
 FROM gue_jobs
 WHERE queue = $1 AND run_at <= $2
@@ -182,12 +182,12 @@ LIMIT 1 FOR UPDATE SKIP LOCKED`
 //
 // After the Job has been worked, you must call either Job.Done() or Job.Error() on it
 // in order to commit transaction to persist Job changes (remove or update it).
-func (c *Client) LockJobByID(ctx context.Context, id ulid.ULID) (*Job, error) {
+func (c *Client) LockJobByID(ctx context.Context, id string) (Job, error) {
 	sql := `SELECT job_id, queue, priority, run_at, job_type, args, error_count, last_error
 FROM gue_jobs
 WHERE job_id = $1 FOR UPDATE SKIP LOCKED`
 
-	return c.execLockJob(ctx, false, sql, id.String())
+	return c.execLockJob(ctx, false, sql, id)
 }
 
 // LockNextScheduledJob attempts to retrieve the earliest scheduled Job from the database in the specified queue.
@@ -203,7 +203,7 @@ WHERE job_id = $1 FOR UPDATE SKIP LOCKED`
 //
 // After the Job has been worked, you must call either Job.Done() or Job.Error() on it
 // in order to commit transaction to persist Job changes (remove or update it).
-func (c *Client) LockNextScheduledJob(ctx context.Context, queue string) (*Job, error) {
+func (c *Client) LockNextScheduledJob(ctx context.Context, queue string) (Job, error) {
 	sql := `SELECT job_id, queue, priority, run_at, job_type, args, error_count, last_error
 FROM gue_jobs
 WHERE queue = $1 AND run_at <= $2
@@ -213,27 +213,27 @@ LIMIT 1 FOR UPDATE SKIP LOCKED`
 	return c.execLockJob(ctx, true, sql, queue, time.Now().UTC())
 }
 
-func (c *Client) execLockJob(ctx context.Context, handleErrNoRows bool, sql string, args ...any) (*Job, error) {
+func (c *Client) execLockJob(ctx context.Context, handleErrNoRows bool, sql string, args ...any) (Job, error) {
 	tx, err := c.pool.Begin(ctx)
 	if err != nil {
 		c.mLockJob.Add(ctx, 1, metric.WithAttributes(attrJobType.String(""), attrSuccess.Bool(false)))
 		return nil, err
 	}
 
-	j := Job{tx: tx, backoff: c.backoff, logger: c.logger}
+	j := BasicJob{tx: tx, backoff: c.backoff, logger: c.logger}
 
 	err = tx.QueryRow(ctx, sql, args...).Scan(
-		&j.ID,
-		&j.Queue,
-		&j.Priority,
-		&j.RunAt,
-		&j.Type,
+		&j.mID,
+		&j.mQueue,
+		&j.mPriority,
+		&j.mRunAt,
+		&j.mType,
 		&j.Args,
 		&j.ErrorCount,
 		&j.LastError,
 	)
 	if err == nil {
-		c.mLockJob.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type), attrSuccess.Bool(true)))
+		c.mLockJob.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.mType), attrSuccess.Bool(true)))
 		return &j, nil
 	}
 

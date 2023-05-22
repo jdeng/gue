@@ -31,18 +31,18 @@ func testLockJob(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	newJob := &Job{
-		Type: "MyJob",
-		Args: []byte(`{invalid]json>`),
+	newJob := &BasicJob{
+		mType: "MyJob",
+		Args:  []byte(`{invalid]json>`),
 	}
 	err = c.Enqueue(ctx, newJob)
 	require.NoError(t, err)
-	require.NotEmpty(t, newJob.ID)
+	require.NotEmpty(t, newJob.ID())
 
 	j, err := c.LockJob(ctx, "")
 	require.NoError(t, err)
 	require.NotNil(t, j)
-	require.NotNil(t, j.tx)
+	require.NotNil(t, j.(*BasicJob).tx)
 
 	t.Cleanup(func() {
 		err := j.Done(ctx)
@@ -50,14 +50,14 @@ func testLockJob(t *testing.T, connPool adapter.ConnPool) {
 	})
 
 	// check values of returned Job
-	assert.Equal(t, newJob.ID.String(), j.ID.String())
+	assert.Equal(t, newJob.ID(), j.ID())
 	assert.Equal(t, defaultQueueName, j.Queue)
 	assert.Equal(t, JobPriorityDefault, j.Priority)
-	assert.False(t, j.RunAt.IsZero())
-	assert.Equal(t, newJob.Type, j.Type)
-	assert.Equal(t, []byte(`{invalid]json>`), j.Args)
-	assert.Equal(t, int32(0), j.ErrorCount)
-	assert.False(t, j.LastError.Valid)
+	assert.False(t, j.RunAt().IsZero())
+	assert.Equal(t, newJob.Type(), j.Type)
+	assert.Equal(t, []byte(`{invalid]json>`), j.(*BasicJob).Args)
+	assert.Equal(t, int32(0), j.(*BasicJob).ErrorCount)
+	assert.False(t, j.(*BasicJob).LastError.Valid)
 }
 
 func TestLockJobAlreadyLocked(t *testing.T) {
@@ -74,7 +74,7 @@ func testLockJobAlreadyLocked(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	err = c.Enqueue(ctx, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctx, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	j, err := c.LockJob(ctx, "")
@@ -124,7 +124,7 @@ func testLockJobCustomQueue(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	err = c.Enqueue(ctx, &Job{Type: "MyJob", Queue: "extra_priority"})
+	err = c.Enqueue(ctx, &BasicJob{mType: "MyJob", mQueue: "extra_priority"})
 	require.NoError(t, err)
 
 	j, err := c.LockJob(ctx, "")
@@ -158,17 +158,17 @@ func testLockJobByID(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	newJob := &Job{
-		Type: "MyJob",
+	newJob := &BasicJob{
+		mType: "MyJob",
 	}
 	err = c.Enqueue(ctx, newJob)
 	require.NoError(t, err)
-	require.NotEmpty(t, newJob.ID)
+	require.NotEmpty(t, newJob.ID())
 
-	j, err := c.LockJobByID(ctx, newJob.ID)
+	j, err := c.LockJobByID(ctx, newJob.ID())
 	require.NoError(t, err)
 
-	require.NotNil(t, j.tx)
+	require.NotNil(t, j.Tx())
 
 	t.Cleanup(func() {
 		err := j.Done(ctx)
@@ -176,14 +176,14 @@ func testLockJobByID(t *testing.T, connPool adapter.ConnPool) {
 	})
 
 	// check values of returned Job
-	assert.Equal(t, newJob.ID.String(), j.ID.String())
-	assert.Equal(t, defaultQueueName, j.Queue)
-	assert.Equal(t, JobPriorityDefault, j.Priority)
-	assert.False(t, j.RunAt.IsZero())
-	assert.Equal(t, newJob.Type, j.Type)
-	assert.Equal(t, []byte(``), j.Args)
-	assert.Equal(t, int32(0), j.ErrorCount)
-	assert.False(t, j.LastError.Valid)
+	assert.Equal(t, newJob.ID(), j.ID())
+	assert.Equal(t, defaultQueueName, j.Queue())
+	assert.Equal(t, JobPriorityDefault, j.Priority())
+	assert.False(t, j.RunAt().IsZero())
+	assert.Equal(t, newJob.Type(), j.Type())
+	assert.Equal(t, []byte(``), j.(*BasicJob).Args)
+	assert.Equal(t, int32(0), j.(*BasicJob).ErrorCount)
+	assert.False(t, j.(*BasicJob).LastError.Valid)
 }
 
 func TestLockJobByIDAlreadyLocked(t *testing.T) {
@@ -200,14 +200,14 @@ func testLockJobByIDAlreadyLocked(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	newJob := &Job{
-		Type: "MyJob",
+	newJob := &BasicJob{
+		mType: "MyJob",
 	}
 
 	err = c.Enqueue(ctx, newJob)
 	require.NoError(t, err)
 
-	j, err := c.LockJobByID(ctx, newJob.ID)
+	j, err := c.LockJobByID(ctx, newJob.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j)
 
@@ -216,7 +216,7 @@ func testLockJobByIDAlreadyLocked(t *testing.T, connPool adapter.ConnPool) {
 		assert.NoError(t, err)
 	})
 
-	j2, err := c.LockJobByID(ctx, newJob.ID)
+	j2, err := c.LockJobByID(ctx, newJob.ID())
 	require.Error(t, err)
 	require.Nil(t, j2)
 }
@@ -235,7 +235,7 @@ func testLockJobByIDNoJob(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	j, err := c.LockJobByID(ctx, ulid.Make())
+	j, err := c.LockJobByID(ctx, ulid.Make().String())
 	require.Error(t, err)
 	require.Nil(t, j)
 }
@@ -254,33 +254,35 @@ func testLockNextScheduledJob(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	newJob := &Job{
-		Type:  "MyJob",
-		RunAt: time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC),
+	newJob := &BasicJob{
+		mType:  "MyJob",
+		mRunAt: time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC),
 	}
 	err = c.Enqueue(ctx, newJob)
 	require.NoError(t, err)
-	require.NotEmpty(t, newJob.ID)
+	require.NotEmpty(t, newJob.ID())
 
 	j, err := c.LockNextScheduledJob(ctx, "")
+
 	require.NoError(t, err)
 
-	require.NotNil(t, j.tx)
+	bj := j.(*BasicJob)
+	require.NotNil(t, bj.tx)
 
 	t.Cleanup(func() {
-		err := j.Done(ctx)
+		err := bj.Done(ctx)
 		assert.NoError(t, err)
 	})
 
 	// check values of returned Job
-	assert.Equal(t, newJob.ID.String(), j.ID.String())
-	assert.Equal(t, defaultQueueName, j.Queue)
-	assert.Equal(t, JobPriorityDefault, j.Priority)
-	assert.False(t, j.RunAt.IsZero())
-	assert.Equal(t, newJob.Type, j.Type)
-	assert.Equal(t, []byte(``), j.Args)
-	assert.Equal(t, int32(0), j.ErrorCount)
-	assert.False(t, j.LastError.Valid)
+	assert.Equal(t, newJob.ID(), bj.ID())
+	assert.Equal(t, defaultQueueName, bj.mQueue)
+	assert.Equal(t, JobPriorityDefault, bj.mPriority)
+	assert.False(t, bj.mRunAt.IsZero())
+	assert.Equal(t, newJob.Type(), bj.Type())
+	assert.Equal(t, []byte(``), bj.Args)
+	assert.Equal(t, int32(0), bj.ErrorCount)
+	assert.False(t, bj.LastError.Valid)
 }
 
 func TestLockNextScheduledJobAlreadyLocked(t *testing.T) {
@@ -297,7 +299,7 @@ func testLockNextScheduledJobAlreadyLocked(t *testing.T, connPool adapter.ConnPo
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	err = c.Enqueue(ctx, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctx, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	j, err := c.LockNextScheduledJob(ctx, "")
@@ -347,7 +349,7 @@ func testJobTx(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	err = c.Enqueue(ctx, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctx, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	j, err := c.LockJob(ctx, "")
@@ -359,7 +361,7 @@ func testJobTx(t *testing.T, connPool adapter.ConnPool) {
 		assert.NoError(t, err)
 	})
 
-	assert.Equal(t, j.tx, j.Tx())
+	assert.Equal(t, j.(*BasicJob).tx, j.Tx())
 }
 
 func TestJobConnRace(t *testing.T) {
@@ -376,7 +378,7 @@ func testJobConnRace(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	err = c.Enqueue(ctx, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctx, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	j, err := c.LockJob(ctx, "")
@@ -419,7 +421,7 @@ func testJobDelete(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	job := Job{Type: "MyJob"}
+	job := BasicJob{mType: "MyJob"}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
@@ -434,7 +436,7 @@ func testJobDelete(t *testing.T, connPool adapter.ConnPool) {
 	require.NoError(t, err)
 
 	// make sure job was deleted
-	jj, err := c.LockJobByID(ctx, job.ID)
+	jj, err := c.LockJobByID(ctx, job.ID())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, adapter.ErrNoRows))
 	assert.Nil(t, jj)
@@ -454,7 +456,7 @@ func testJobDone(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	err = c.Enqueue(ctx, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctx, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	j, err := c.LockJob(ctx, "")
@@ -465,7 +467,7 @@ func testJobDone(t *testing.T, connPool adapter.ConnPool) {
 	require.NoError(t, err)
 
 	// make sure tx was cleared
-	assert.Nil(t, j.tx)
+	assert.Nil(t, j.(*BasicJob).tx)
 }
 
 func TestJobDoneMultiple(t *testing.T) {
@@ -482,7 +484,7 @@ func testJobDoneMultiple(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	err = c.Enqueue(ctx, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctx, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	j, err := c.LockJob(ctx, "")
@@ -510,7 +512,7 @@ func testJobError(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	job := &Job{Type: "MyJob"}
+	job := &BasicJob{mType: "MyJob"}
 	err = c.Enqueue(ctx, job)
 	require.NoError(t, err)
 
@@ -523,7 +525,7 @@ func testJobError(t *testing.T, connPool adapter.ConnPool) {
 	require.NoError(t, err)
 
 	// make sure job was not deleted
-	j2, err := c.LockJobByID(ctx, job.ID)
+	j2, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j2)
 
@@ -532,10 +534,10 @@ func testJobError(t *testing.T, connPool adapter.ConnPool) {
 		assert.NoError(t, err)
 	})
 
-	assert.True(t, j2.LastError.Valid)
-	assert.Equal(t, msg, j2.LastError.String)
-	assert.Equal(t, int32(1), j2.ErrorCount)
-	assert.Greater(t, j2.RunAt.Unix(), job.RunAt.Unix())
+	assert.True(t, j2.(*BasicJob).LastError.Valid)
+	assert.Equal(t, msg, j2.(*BasicJob).LastError.String)
+	assert.Equal(t, int32(1), j2.(*BasicJob).ErrorCount)
+	assert.Greater(t, j2.RunAt().Unix(), job.mRunAt.Unix())
 }
 
 func TestJobErrorCustomBackoff(t *testing.T) {
@@ -556,7 +558,7 @@ func testJobErrorCustomBackoff(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool, WithClientBackoff(customBackoff))
 	require.NoError(t, err)
 
-	job := &Job{Type: "MyJob"}
+	job := &BasicJob{mType: "MyJob"}
 	err = c.Enqueue(ctx, job)
 	require.NoError(t, err)
 
@@ -569,7 +571,7 @@ func testJobErrorCustomBackoff(t *testing.T, connPool adapter.ConnPool) {
 	require.NoError(t, err)
 
 	// make sure job was not deleted
-	j2, err := c.LockJobByID(ctx, job.ID)
+	j2, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j2)
 
@@ -578,12 +580,12 @@ func testJobErrorCustomBackoff(t *testing.T, connPool adapter.ConnPool) {
 		assert.NoError(t, err)
 	})
 
-	assert.True(t, j2.LastError.Valid)
-	assert.Equal(t, msg, j2.LastError.String)
-	assert.Equal(t, int32(1), j2.ErrorCount)
-	assert.Greater(t, j2.RunAt.Unix(), job.RunAt.Unix())
+	assert.True(t, j2.(*BasicJob).LastError.Valid)
+	assert.Equal(t, msg, j2.(*BasicJob).LastError.String)
+	assert.Equal(t, int32(1), j2.(*BasicJob).ErrorCount)
+	assert.Greater(t, j2.RunAt().Unix(), job.mRunAt.Unix())
 	// a diff in a sec is possible when doing dates math, so allow it
-	assert.WithinDuration(t, job.RunAt.Add(time.Hour), j2.RunAt, time.Second)
+	assert.WithinDuration(t, job.mRunAt.Add(time.Hour), j2.RunAt(), time.Second)
 }
 
 func TestJobPriority(t *testing.T) {
@@ -601,27 +603,27 @@ func testJobPriority(t *testing.T, connPool adapter.ConnPool) {
 	require.NoError(t, err)
 
 	// insert in the order different from expected to be locked
-	jobPriorityDefault := &Job{Type: "MyJob", Priority: JobPriorityDefault, Args: []byte(`default`)}
+	jobPriorityDefault := &BasicJob{mType: "MyJob", mPriority: JobPriorityDefault, Args: []byte(`default`)}
 	err = c.Enqueue(ctx, jobPriorityDefault)
 	require.NoError(t, err)
 
-	jobPriorityLowest := &Job{Type: "MyJob", Priority: JobPriorityLowest, Args: []byte(`lowest`)}
+	jobPriorityLowest := &BasicJob{mType: "MyJob", mPriority: JobPriorityLowest, Args: []byte(`lowest`)}
 	err = c.Enqueue(ctx, jobPriorityLowest)
 	require.NoError(t, err)
 
-	jobPriorityHighest := &Job{Type: "MyJob", Priority: JobPriorityHighest, Args: []byte(`highest`)}
+	jobPriorityHighest := &BasicJob{mType: "MyJob", mPriority: JobPriorityHighest, Args: []byte(`highest`)}
 	err = c.Enqueue(ctx, jobPriorityHighest)
 	require.NoError(t, err)
 
-	jobPriorityLow := &Job{Type: "MyJob", Priority: JobPriorityLow, Args: []byte(`low`)}
+	jobPriorityLow := &BasicJob{mType: "MyJob", mPriority: JobPriorityLow, Args: []byte(`low`)}
 	err = c.Enqueue(ctx, jobPriorityLow)
 	require.NoError(t, err)
 
-	jobPriorityHigh := &Job{Type: "MyJob", Priority: JobPriorityHigh, Args: []byte(`high`)}
+	jobPriorityHigh := &BasicJob{mType: "MyJob", mPriority: JobPriorityHigh, Args: []byte(`high`)}
 	err = c.Enqueue(ctx, jobPriorityHigh)
 	require.NoError(t, err)
 
-	expectedOrder := []*Job{jobPriorityHighest, jobPriorityHigh, jobPriorityDefault, jobPriorityLow, jobPriorityLowest}
+	expectedOrder := []*BasicJob{jobPriorityHighest, jobPriorityHigh, jobPriorityDefault, jobPriorityLow, jobPriorityLowest}
 	for _, expected := range expectedOrder {
 		j, err := c.LockJob(ctx, "")
 		require.NoError(t, err)
@@ -631,27 +633,27 @@ func testJobPriority(t *testing.T, connPool adapter.ConnPool) {
 			assert.NoError(t, err)
 		})
 
-		assert.Equal(t, expected.Priority, j.Priority)
-		assert.Equal(t, expected.Args, j.Args)
+		assert.Equal(t, expected.mPriority, j.Priority())
+		assert.Equal(t, expected.Args, j.(*BasicJob).Args)
 	}
 }
 
-func findOneJob(t testing.TB, q adapter.Queryable) *Job {
+func findOneJob(t testing.TB, q adapter.Queryable) *BasicJob {
 	t.Helper()
 
-	j := new(Job)
+	j := new(BasicJob)
 	err := q.QueryRow(
 		context.Background(),
 		`SELECT priority, run_at, job_id, job_type, args, error_count, last_error, queue FROM gue_jobs LIMIT 1`,
 	).Scan(
-		&j.Priority,
-		&j.RunAt,
-		&j.ID,
-		&j.Type,
+		&j.mPriority,
+		&j.mRunAt,
+		&j.mID,
+		&j.mType,
 		&j.Args,
 		&j.ErrorCount,
 		&j.LastError,
-		&j.Queue,
+		&j.mQueue,
 	)
 	if err == adapter.ErrNoRows {
 		return nil
@@ -679,11 +681,11 @@ func testAdapterQuery(t *testing.T, connPool adapter.ConnPool) {
 	queue := now.Format(time.RFC3339Nano)
 
 	// schedule several jobs
-	j1 := Job{Queue: queue, RunAt: now, Type: "test1"}
-	j2 := Job{Queue: queue, RunAt: now, Type: "test2"}
-	j3 := Job{Queue: queue, RunAt: now, Type: "test3"}
+	j1 := BasicJob{mQueue: queue, mRunAt: now, mType: "test1"}
+	j2 := BasicJob{mQueue: queue, mRunAt: now, mType: "test2"}
+	j3 := BasicJob{mQueue: queue, mRunAt: now, mType: "test3"}
 
-	err = c.EnqueueBatch(ctx, []*Job{&j1, &j2, &j3})
+	err = c.EnqueueBatch(ctx, []*BasicJob{&j1, &j2, &j3})
 	require.NoError(t, err)
 
 	// test pool
@@ -706,16 +708,16 @@ func testAdapterQuery(t *testing.T, connPool adapter.ConnPool) {
 	assert.NoError(t, err)
 }
 
-func testQueryableQuery(ctx context.Context, t *testing.T, q adapter.Queryable, queue string, j1, j2, j3 *Job) {
+func testQueryableQuery(ctx context.Context, t *testing.T, q adapter.Queryable, queue string, j1, j2, j3 *BasicJob) {
 	t.Helper()
 
 	rows, err := q.Query(ctx, `SELECT job_id, job_type FROM gue_jobs WHERE queue = $1 ORDER BY job_id ASC`, queue)
 	require.NoError(t, err)
 
-	var jobs []*Job
+	var jobs []*BasicJob
 	for rows.Next() {
-		j := new(Job)
-		err := rows.Scan(&j.ID, &j.Type)
+		j := new(BasicJob)
+		err := rows.Scan(&j.mID, &j.mType)
 		require.NoError(t, err)
 
 		jobs = append(jobs, j)
@@ -725,12 +727,12 @@ func testQueryableQuery(ctx context.Context, t *testing.T, q adapter.Queryable, 
 	err = rows.Err()
 	require.NoError(t, err)
 
-	assert.Equal(t, j1.ID.String(), jobs[0].ID.String())
-	assert.Equal(t, j1.Type, jobs[0].Type)
-	assert.Equal(t, j2.ID.String(), jobs[1].ID.String())
-	assert.Equal(t, j2.Type, jobs[1].Type)
-	assert.Equal(t, j3.ID.String(), jobs[2].ID.String())
-	assert.Equal(t, j3.Type, jobs[2].Type)
+	assert.Equal(t, j1.ID(), jobs[0].ID())
+	assert.Equal(t, j1.Type(), jobs[0].Type())
+	assert.Equal(t, j2.ID(), jobs[1].ID())
+	assert.Equal(t, j2.Type(), jobs[1].Type())
+	assert.Equal(t, j3.ID(), jobs[2].ID())
+	assert.Equal(t, j3.Type(), jobs[2].Type())
 }
 
 func TestMultiSchema(t *testing.T) {
@@ -749,17 +751,17 @@ func TestMultiSchema(t *testing.T) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	newJob := &Job{
-		Type: "MyJob",
+	newJob := &BasicJob{
+		mType: "MyJob",
 	}
 	err = c.Enqueue(ctx, newJob)
 	require.NoError(t, err)
-	require.NotEmpty(t, newJob.ID)
+	require.NotEmpty(t, newJob.ID())
 
 	j, err := c.LockJob(ctx, "")
 	require.NoError(t, err)
 
-	require.NotNil(t, j.tx)
+	require.NotNil(t, j.Tx())
 
 	t.Cleanup(func() {
 		err := j.Done(ctx)
@@ -818,14 +820,14 @@ VALUES
 	j1, err := c.LockJob(ctx, queueName)
 	require.NoError(t, err)
 	require.NotNil(t, j1)
-	t.Logf("Locked a job: %s %s", j1.ID.String(), string(j1.Args))
+	t.Logf("Locked a job: %s %s", j1.ID(), string(j1.(*BasicJob).Args))
 
 	err = j1.Delete(ctx)
 	require.NoError(t, err)
 	err = j1.Done(ctx)
 	require.NoError(t, err)
 
-	j2, err := c.LockJobByID(ctx, j1.ID)
+	j2, err := c.LockJobByID(ctx, j1.ID())
 	require.Error(t, err)
 	require.Nil(t, j2)
 }

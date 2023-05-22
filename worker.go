@@ -42,7 +42,7 @@ const (
 //
 // Modifying Job fields and calling any methods that are modifying its state within the handler may lead to undefined
 // behaviour. Please never do this.
-type WorkFunc func(ctx context.Context, j *Job) error
+type WorkFunc func(ctx context.Context, j Job) error
 
 // HookFunc is a function that may react to a Job lifecycle events. All the callbacks are being executed synchronously,
 // so be careful with the long-running locking operations. Hooks do not return an error, therefore they can not and
@@ -51,14 +51,14 @@ type WorkFunc func(ctx context.Context, j *Job) error
 // behaviour. Please never do this.
 //
 // Depending on the event err parameter may be empty or not - check the event description for its meaning.
-type HookFunc func(ctx context.Context, j *Job, err error)
+type HookFunc func(ctx context.Context, j Job, err error)
 
 // WorkMap is a map of Job names to WorkFuncs that are used to perform Jobs of a
 // given type.
 type WorkMap map[string]WorkFunc
 
 // pollFunc is a function that queries the DB for the next job to work on
-type pollFunc func(context.Context, string) (*Job, error)
+type pollFunc func(context.Context, string) (Job, error)
 
 // Worker is a single worker that pulls jobs off the specified queue. If no Job
 // is found, the Worker will sleep for interval seconds.
@@ -196,11 +196,11 @@ func (w *Worker) WorkOne(ctx context.Context) (didWork bool) {
 
 	processingStartedAt := time.Now()
 	ctx, span := w.tracer.Start(ctx, "Worker.WorkOne", trace.WithAttributes(
-		attribute.String("job-type", j.Type),
+		attribute.String("job-type", j.Type()),
 	))
 	defer span.End()
 
-	ll := w.logger.With(adapter.F("job-id", j.ID.String()), adapter.F("job-type", j.Type))
+	ll := w.logger.With(adapter.F("job-id", j.ID()), adapter.F("job-type", j.Type()))
 
 	defer func() {
 		if err := j.Done(ctx); err != nil {
@@ -211,7 +211,7 @@ func (w *Worker) WorkOne(ctx context.Context) (didWork bool) {
 		w.mDuration.Record(
 			ctx,
 			time.Since(processingStartedAt).Milliseconds(),
-			metric.WithAttributes(attrJobType.String(j.Type)),
+			metric.WithAttributes(attrJobType.String(j.Type())),
 		)
 	}()
 	defer w.recoverPanic(ctx, ll, j)
@@ -222,14 +222,14 @@ func (w *Worker) WorkOne(ctx context.Context) (didWork bool) {
 
 	didWork = true
 
-	wf, ok := w.wm[j.Type]
+	wf, ok := w.wm[j.Type()]
 	if !ok {
-		w.mWorked.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type), attrSuccess.Bool(false)))
+		w.mWorked.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type()), attrSuccess.Bool(false)))
 
 		span.RecordError(errors.New("job with unknown type"))
 		ll.Error("Got a job with unknown type")
 
-		errUnknownType := fmt.Errorf("worker[id=%s] unknown job type: %q", w.id, j.Type)
+		errUnknownType := fmt.Errorf("worker[id=%s] unknown job type: %q", w.id, j.Type())
 		if err = j.Error(ctx, errUnknownType); err != nil {
 			span.RecordError(fmt.Errorf("failed to mark job as error: %w", err))
 			ll.Error("Got an error on setting an error to unknown job", adapter.Err(err))
@@ -243,7 +243,7 @@ func (w *Worker) WorkOne(ctx context.Context) (didWork bool) {
 	}
 
 	if err = wf(ctx, j); err != nil {
-		w.mWorked.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type), attrSuccess.Bool(false)))
+		w.mWorked.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type()), attrSuccess.Bool(false)))
 
 		for _, hook := range w.hooksJobDone {
 			hook(ctx, j, err)
@@ -267,7 +267,7 @@ func (w *Worker) WorkOne(ctx context.Context) (didWork bool) {
 		ll.Error("Got an error on deleting a job", adapter.Err(err))
 	}
 
-	w.mWorked.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type), attrSuccess.Bool(err == nil)))
+	w.mWorked.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type()), attrSuccess.Bool(err == nil)))
 	ll.Debug("Job finished")
 	return
 }
@@ -294,7 +294,7 @@ func (w *Worker) initMetrics() (err error) {
 
 // recoverPanic tries to handle panics in job execution.
 // A stacktrace is stored into Job last_error.
-func (w *Worker) recoverPanic(ctx context.Context, logger adapter.Logger, j *Job) {
+func (w *Worker) recoverPanic(ctx context.Context, logger adapter.Logger, j Job) {
 	if r := recover(); r != nil {
 		ctx, span := w.tracer.Start(ctx, "Worker.recoverPanic")
 		defer span.End()
@@ -313,7 +313,7 @@ func (w *Worker) recoverPanic(ctx context.Context, logger adapter.Logger, j *Job
 			logger.Error("Could not build panicked job stacktrace", adapter.Err(err), adapter.F("runtime-stack", string(stackBuf[:n])))
 		}
 
-		w.mWorked.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type), attrSuccess.Bool(false)))
+		w.mWorked.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type()), attrSuccess.Bool(false)))
 		span.RecordError(errors.New("job panicked"), trace.WithAttributes(attribute.String("stacktrace", stacktrace)))
 		logger.Error("Job panicked", adapter.F("stacktrace", stacktrace))
 

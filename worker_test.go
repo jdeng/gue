@@ -22,11 +22,11 @@ import (
 type mockHook struct {
 	called int
 	ctx    context.Context
-	j      *Job
+	j      Job
 	err    error
 }
 
-func (h *mockHook) handler(ctx context.Context, j *Job, err error) {
+func (h *mockHook) handler(ctx context.Context, j Job, err error) {
 	h.called++
 	h.ctx, h.j, h.err = ctx, j, err
 }
@@ -47,7 +47,7 @@ func testWorkerWorkOne(t *testing.T, connPool adapter.ConnPool) {
 
 	var success bool
 	wm := WorkMap{
-		"MyJob": func(ctx context.Context, j *Job) error {
+		"MyJob": func(ctx context.Context, j Job) error {
 			success = true
 			return nil
 		},
@@ -69,7 +69,7 @@ func testWorkerWorkOne(t *testing.T, connPool adapter.ConnPool) {
 	didWork := w.WorkOne(ctx)
 	assert.False(t, didWork)
 
-	err = c.Enqueue(ctx, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctx, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	didWork = w.WorkOne(ctx)
@@ -141,7 +141,7 @@ func testWorkerPoolRun(t *testing.T, connPool adapter.ConnPool) {
 	)
 
 	w, err := NewWorkerPool(c, WorkMap{
-		"dummy-job": func(ctx context.Context, j *Job) error {
+		"dummy-job": func(ctx context.Context, j Job) error {
 			m.Lock()
 			defer m.Unlock()
 
@@ -157,7 +157,7 @@ func testWorkerPoolRun(t *testing.T, connPool adapter.ConnPool) {
 
 	jobsToWork := 15
 	for i := 0; i < jobsToWork; i++ {
-		err := c.Enqueue(ctx, &Job{Type: "dummy-job"})
+		err := c.Enqueue(ctx, &BasicJob{mType: "dummy-job"})
 		require.NoError(t, err)
 	}
 
@@ -205,7 +205,7 @@ func testWorkerPoolWorkOne(t *testing.T, connPool adapter.ConnPool) {
 
 	var success bool
 	wm := WorkMap{
-		"MyJob": func(ctx context.Context, j *Job) error {
+		"MyJob": func(ctx context.Context, j Job) error {
 			success = true
 			return nil
 		},
@@ -228,7 +228,7 @@ func testWorkerPoolWorkOne(t *testing.T, connPool adapter.ConnPool) {
 	didWork := w.WorkOne(ctx)
 	assert.False(t, didWork)
 
-	err = c.Enqueue(ctx, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctx, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	didWork = w.WorkOne(ctx)
@@ -264,7 +264,7 @@ func benchmarkWorker(b *testing.B, connPool adapter.ConnPool) {
 	require.NoError(b, err)
 
 	for i := 0; i < b.N; i++ {
-		if err := c.Enqueue(ctx, &Job{Type: "Nil"}); err != nil {
+		if err := c.Enqueue(ctx, &BasicJob{mType: "Nil"}); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -275,7 +275,7 @@ func benchmarkWorker(b *testing.B, connPool adapter.ConnPool) {
 	}
 }
 
-func nilWorker(context.Context, *Job) error {
+func nilWorker(context.Context, Job) error {
 	return nil
 }
 
@@ -295,7 +295,7 @@ func testWorkerWorkReturnsError(t *testing.T, connPool adapter.ConnPool) {
 
 	called := 0
 	wm := WorkMap{
-		"MyJob": func(ctx context.Context, j *Job) error {
+		"MyJob": func(ctx context.Context, j Job) error {
 			called++
 			return errors.New("the error msg")
 		},
@@ -317,7 +317,7 @@ func testWorkerWorkReturnsError(t *testing.T, connPool adapter.ConnPool) {
 	didWork := w.WorkOne(ctx)
 	assert.False(t, didWork)
 
-	job := Job{Type: "MyJob"}
+	job := BasicJob{mType: "MyJob"}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
@@ -335,7 +335,7 @@ func testWorkerWorkReturnsError(t *testing.T, connPool adapter.ConnPool) {
 	assert.NotNil(t, jobDoneHook.j)
 	assert.Error(t, jobDoneHook.err)
 
-	j, err := c.LockJobByID(ctx, job.ID)
+	j, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j)
 
@@ -344,9 +344,9 @@ func testWorkerWorkReturnsError(t *testing.T, connPool adapter.ConnPool) {
 		assert.NoError(t, err)
 	})
 
-	assert.Equal(t, int32(1), j.ErrorCount)
-	assert.True(t, j.LastError.Valid)
-	assert.Equal(t, "the error msg", j.LastError.String)
+	assert.Equal(t, int32(1), j.(*BasicJob).ErrorCount)
+	assert.True(t, j.(*BasicJob).LastError.Valid)
+	assert.Equal(t, "the error msg", j.(*BasicJob).LastError.String)
 }
 
 func TestWorkerWorkRescuesPanic(t *testing.T) {
@@ -367,7 +367,7 @@ func testWorkerWorkRescuesPanic(t *testing.T, connPool adapter.ConnPool) {
 
 	called := 0
 	wm := WorkMap{
-		"MyJob": func(ctx context.Context, j *Job) error {
+		"MyJob": func(ctx context.Context, j Job) error {
 			called++
 			panic("the panic msg")
 		},
@@ -375,14 +375,14 @@ func testWorkerWorkRescuesPanic(t *testing.T, connPool adapter.ConnPool) {
 	w, err := NewWorker(c, wm, WithWorkerLogger(adapterZap.New(logger)))
 	require.NoError(t, err)
 
-	job := Job{Type: "MyJob"}
+	job := BasicJob{mType: "MyJob"}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
 	w.WorkOne(ctx)
 	assert.Equal(t, 1, called)
 
-	j, err := c.LockJobByID(ctx, job.ID)
+	j, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j)
 
@@ -391,12 +391,12 @@ func testWorkerWorkRescuesPanic(t *testing.T, connPool adapter.ConnPool) {
 		assert.NoError(t, err)
 	})
 
-	assert.Equal(t, int32(1), j.ErrorCount)
-	assert.True(t, j.LastError.Valid)
-	assert.Contains(t, j.LastError.String, "the panic msg\n")
+	assert.Equal(t, int32(1), j.(*BasicJob).ErrorCount)
+	assert.True(t, j.(*BasicJob).LastError.Valid)
+	assert.Contains(t, j.(*BasicJob).LastError.String, "the panic msg\n")
 	// basic check if a stacktrace is there - not the stacktrace format itself
-	assert.Contains(t, j.LastError.String, "worker.go:")
-	assert.Contains(t, j.LastError.String, "worker_test.go:")
+	assert.Contains(t, j.(*BasicJob).LastError.String, "worker.go:")
+	assert.Contains(t, j.(*BasicJob).LastError.String, "worker_test.go:")
 
 	panicLogs := logs.FilterLevelExact(zapcore.ErrorLevel).FilterMessage("Job panicked").All()
 	require.Len(t, panicLogs, 1)
@@ -418,24 +418,24 @@ func testWorkerWorkWithWorkerHooksJobDonePanic(t *testing.T, connPool adapter.Co
 
 	called := 0
 	wm := WorkMap{
-		"MyJob": func(ctx context.Context, j *Job) error {
+		"MyJob": func(ctx context.Context, j Job) error {
 			called++
 			return nil
 		},
 	}
-	w, err := NewWorker(c, wm, WithWorkerHooksJobDone(func(ctx context.Context, j *Job, err error) {
+	w, err := NewWorker(c, wm, WithWorkerHooksJobDone(func(ctx context.Context, j Job, err error) {
 		panic("panic from the hook job done")
 	}))
 	require.NoError(t, err)
 
-	job := Job{Type: "MyJob"}
+	job := BasicJob{mType: "MyJob"}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
 	w.WorkOne(ctx)
 	assert.Equal(t, 1, called)
 
-	j, err := c.LockJobByID(ctx, job.ID)
+	j, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j)
 
@@ -444,12 +444,12 @@ func testWorkerWorkWithWorkerHooksJobDonePanic(t *testing.T, connPool adapter.Co
 		assert.NoError(t, err)
 	})
 
-	assert.Equal(t, int32(1), j.ErrorCount)
-	assert.True(t, j.LastError.Valid)
-	assert.Contains(t, j.LastError.String, "panic from the hook job done\n")
+	assert.Equal(t, int32(1), j.(*BasicJob).ErrorCount)
+	assert.True(t, j.(*BasicJob).LastError.Valid)
+	assert.Contains(t, j.(*BasicJob).LastError.String, "panic from the hook job done\n")
 	// basic check if a stacktrace is there - not the stacktrace format itself
-	assert.Contains(t, j.LastError.String, "worker.go:")
-	assert.Contains(t, j.LastError.String, "worker_test.go:")
+	assert.Contains(t, j.(*BasicJob).LastError.String, "worker.go:")
+	assert.Contains(t, j.(*BasicJob).LastError.String, "worker_test.go:")
 }
 
 func TestWorkerWorkOneTypeNotInMap(t *testing.T) {
@@ -488,7 +488,7 @@ func testWorkerWorkOneTypeNotInMap(t *testing.T, connPool adapter.ConnPool) {
 	assert.Equal(t, 0, unknownJobTypeHook.called)
 	assert.Equal(t, 0, jobDoneHook.called)
 
-	job := Job{Type: "MyJob"}
+	job := BasicJob{mType: "MyJob"}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
@@ -505,7 +505,7 @@ func testWorkerWorkOneTypeNotInMap(t *testing.T, connPool adapter.ConnPool) {
 
 	assert.Equal(t, 0, jobDoneHook.called)
 
-	j, err := c.LockJobByID(ctx, job.ID)
+	j, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j)
 
@@ -514,9 +514,9 @@ func testWorkerWorkOneTypeNotInMap(t *testing.T, connPool adapter.ConnPool) {
 		assert.NoError(t, err)
 	})
 
-	assert.Equal(t, int32(1), j.ErrorCount)
-	assert.True(t, j.LastError.Valid)
-	assert.Contains(t, j.LastError.String, `unknown job type: "MyJob"`)
+	assert.Equal(t, int32(1), j.(*BasicJob).ErrorCount)
+	assert.True(t, j.(*BasicJob).LastError.Valid)
+	assert.Contains(t, j.(*BasicJob).LastError.String, `unknown job type: "MyJob"`)
 }
 
 // TestWorker_WorkOne_errorHookTx tests that JobDone hooks are running in the same transaction as the errored job
@@ -537,13 +537,13 @@ func testWorkerWorkOneErrorHookTx(t *testing.T, connPool adapter.ConnPool) {
 	called := 0
 	jobErr := errors.New("the error msg")
 	wm := WorkMap{
-		"MyJob": func(ctx context.Context, j *Job) error {
+		"MyJob": func(ctx context.Context, j Job) error {
 			called++
 			return jobErr
 		},
 	}
 
-	jobDoneHook := func(ctx context.Context, j *Job, err error) {
+	jobDoneHook := func(ctx context.Context, j Job, err error) {
 		assert.Error(t, err)
 		assert.Equal(t, jobErr, err)
 
@@ -561,7 +561,7 @@ func testWorkerWorkOneErrorHookTx(t *testing.T, connPool adapter.ConnPool) {
 	)
 	require.NoError(t, err)
 
-	job := Job{Type: "MyJob"}
+	job := BasicJob{mType: "MyJob"}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
@@ -578,7 +578,7 @@ func TestNewWorker_GracefulShutdown(t *testing.T) {
 
 	var jobCancelled bool
 	wm := WorkMap{
-		"MyJob": func(ctx context.Context, j *Job) error {
+		"MyJob": func(ctx context.Context, j Job) error {
 			select {
 			case <-ctx.Done():
 				jobCancelled = true
@@ -593,7 +593,7 @@ func TestNewWorker_GracefulShutdown(t *testing.T) {
 	ctxNonGraceful, cancelNonGraceful := context.WithTimeout(context.Background(), time.Second)
 	defer cancelNonGraceful()
 
-	err = c.Enqueue(ctxNonGraceful, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctxNonGraceful, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	wNonGraceful, err := NewWorker(c, wm)
@@ -612,7 +612,7 @@ func TestNewWorker_GracefulShutdown(t *testing.T) {
 	ctxGraceful, cancelGraceful := context.WithTimeout(context.Background(), time.Second)
 	defer cancelGraceful()
 
-	err = c.Enqueue(ctxGraceful, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctxGraceful, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	wGraceful, err := NewWorker(c, wm, WithWorkerGracefulShutdown(nil))
@@ -637,7 +637,7 @@ func TestNewWorkerPool_GracefulShutdown(t *testing.T) {
 	const numWorkers = 5
 	jobCancelled, jobFinished := 0, 0
 	wm := WorkMap{
-		"MyJob": func(ctx context.Context, j *Job) error {
+		"MyJob": func(ctx context.Context, j Job) error {
 			select {
 			case <-ctx.Done():
 				jobCancelled++
@@ -653,7 +653,7 @@ func TestNewWorkerPool_GracefulShutdown(t *testing.T) {
 	defer cancelNonGraceful()
 
 	for i := 0; i < numWorkers; i++ {
-		err = c.Enqueue(ctxNonGraceful, &Job{Type: "MyJob"})
+		err = c.Enqueue(ctxNonGraceful, &BasicJob{mType: "MyJob"})
 		require.NoError(t, err)
 	}
 
@@ -675,7 +675,7 @@ func TestNewWorkerPool_GracefulShutdown(t *testing.T) {
 	ctxGraceful, cancelGraceful := context.WithTimeout(context.Background(), time.Second)
 	defer cancelGraceful()
 
-	err = c.Enqueue(ctxGraceful, &Job{Type: "MyJob"})
+	err = c.Enqueue(ctxGraceful, &BasicJob{mType: "MyJob"})
 	require.NoError(t, err)
 
 	wGraceful, err := NewWorkerPool(c, wm, numWorkers, WithPoolGracefulShutdown(nil))

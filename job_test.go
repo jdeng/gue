@@ -28,15 +28,15 @@ func testJobTxUnwrapTx(t *testing.T, name string, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	newJob := &Job{Type: "MyJob", Args: []byte(`{}`)}
+	newJob := &BasicJob{mType: "MyJob", Args: []byte(`{}`)}
 	err = c.Enqueue(ctx, newJob)
 	require.NoError(t, err)
-	require.NotEmpty(t, newJob.ID)
+	require.NotEmpty(t, newJob.ID())
 
 	j, err := c.LockJob(ctx, "")
 	require.NoError(t, err)
 	require.NotNil(t, j)
-	require.NotNil(t, j.tx)
+	require.NotNil(t, j.Tx())
 
 	t.Cleanup(func() {
 		err := j.Done(ctx)

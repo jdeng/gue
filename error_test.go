@@ -30,12 +30,12 @@ func testErrRescheduleJobIn(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	j := Job{RunAt: now, Type: "foo"}
+	j := BasicJob{mRunAt: now, mType: "foo"}
 	err = c.Enqueue(ctx, &j)
 	require.NoError(t, err)
-	require.NotEmpty(t, j.ID)
+	require.NotEmpty(t, j.ID())
 
-	jLocked1, err := c.LockJobByID(ctx, j.ID)
+	jLocked1, err := c.LockJobByID(ctx, j.ID())
 	require.NoError(t, err)
 
 	errReschedule := ErrRescheduleJobIn(10*time.Second, "reschedule me for later time")
@@ -45,13 +45,13 @@ func testErrRescheduleJobIn(t *testing.T, connPool adapter.ConnPool) {
 	err = jLocked1.Error(ctx, errReschedule)
 	require.NoError(t, err)
 
-	jLocked2, err := c.LockJobByID(ctx, j.ID)
+	jLocked2, err := c.LockJobByID(ctx, j.ID())
 	require.NoError(t, err)
 
-	assert.Equal(t, int32(1), jLocked2.ErrorCount)
-	assert.True(t, jLocked2.LastError.Valid)
-	assert.Equal(t, errRescheduleStr, jLocked2.LastError.String)
-	assert.GreaterOrEqual(t, jLocked2.RunAt.Sub(jLocked1.RunAt), 10*time.Second)
+	assert.Equal(t, int32(1), jLocked2.(*BasicJob).ErrorCount)
+	assert.True(t, jLocked2.(*BasicJob).LastError.Valid)
+	assert.Equal(t, errRescheduleStr, jLocked2.(*BasicJob).LastError.String)
+	assert.GreaterOrEqual(t, jLocked2.RunAt().Sub(jLocked1.RunAt()), 10*time.Second)
 
 	err = jLocked2.Done(ctx)
 	require.NoError(t, err)
@@ -75,12 +75,12 @@ func testErrRescheduleJobAt(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	j := Job{RunAt: now, Type: "foo"}
+	j := BasicJob{mRunAt: now, mType: "foo"}
 	err = c.Enqueue(ctx, &j)
 	require.NoError(t, err)
-	require.NotEmpty(t, j.ID)
+	require.NotEmpty(t, j.ID())
 
-	jLocked1, err := c.LockJobByID(ctx, j.ID)
+	jLocked1, err := c.LockJobByID(ctx, j.ID())
 	require.NoError(t, err)
 
 	errReschedule := ErrRescheduleJobAt(rescheduleAt, "reschedule me for later time")
@@ -90,13 +90,13 @@ func testErrRescheduleJobAt(t *testing.T, connPool adapter.ConnPool) {
 	err = jLocked1.Error(ctx, errReschedule)
 	require.NoError(t, err)
 
-	jLocked2, err := c.LockJobByID(ctx, j.ID)
+	jLocked2, err := c.LockJobByID(ctx, j.ID())
 	require.NoError(t, err)
 
-	assert.Equal(t, int32(1), jLocked2.ErrorCount)
-	assert.True(t, jLocked2.LastError.Valid)
-	assert.Equal(t, errRescheduleStr, jLocked2.LastError.String)
-	assert.True(t, jLocked2.RunAt.Round(time.Second).Equal(rescheduleAt.Round(time.Second)))
+	assert.Equal(t, int32(1), jLocked2.(*BasicJob).ErrorCount)
+	assert.True(t, jLocked2.(*BasicJob).LastError.Valid)
+	assert.Equal(t, errRescheduleStr, jLocked2.(*BasicJob).LastError.String)
+	assert.True(t, jLocked2.RunAt().Round(time.Second).Equal(rescheduleAt.Round(time.Second)))
 
 	err = jLocked2.Done(ctx)
 	require.NoError(t, err)
@@ -119,12 +119,12 @@ func testErrDiscardJob(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	j := Job{RunAt: now, Type: "foo"}
+	j := BasicJob{mRunAt: now, mType: "foo"}
 	err = c.Enqueue(ctx, &j)
 	require.NoError(t, err)
-	require.NotEmpty(t, j.ID)
+	require.NotEmpty(t, j.ID())
 
-	jLocked1, err := c.LockJobByID(ctx, j.ID)
+	jLocked1, err := c.LockJobByID(ctx, j.ID())
 	require.NoError(t, err)
 
 	errReschedule := ErrDiscardJob("no job - no fear of being fired")
@@ -134,7 +134,7 @@ func testErrDiscardJob(t *testing.T, connPool adapter.ConnPool) {
 	err = jLocked1.Error(ctx, errReschedule)
 	require.NoError(t, err)
 
-	jLocked2, err := c.LockJobByID(ctx, j.ID)
+	jLocked2, err := c.LockJobByID(ctx, j.ID())
 	require.Error(t, err)
 	assert.Nil(t, jLocked2)
 }

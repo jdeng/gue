@@ -27,11 +27,11 @@ func testEnqueueOnlyType(t *testing.T, connPool adapter.ConnPool) {
 	require.NoError(t, err)
 
 	jobType := "MyJob"
-	job := Job{Type: jobType}
+	job := BasicJob{mType: jobType}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
-	j, err := c.LockJobByID(ctx, job.ID)
+	j, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j)
 
@@ -41,14 +41,14 @@ func testEnqueueOnlyType(t *testing.T, connPool adapter.ConnPool) {
 	})
 
 	// check resulting job
-	assert.NotEmpty(t, j.ID)
-	assert.Equal(t, defaultQueueName, j.Queue)
-	assert.Equal(t, JobPriorityDefault, j.Priority)
-	assert.False(t, j.RunAt.IsZero())
-	assert.Equal(t, jobType, j.Type)
-	assert.Equal(t, []byte(``), j.Args)
-	assert.Equal(t, int32(0), j.ErrorCount)
-	assert.False(t, j.LastError.Valid)
+	assert.NotEmpty(t, j.ID())
+	assert.Equal(t, defaultQueueName, j.Queue())
+	assert.Equal(t, JobPriorityDefault, j.Priority())
+	assert.False(t, j.RunAt().IsZero())
+	assert.Equal(t, jobType, j.Type())
+	assert.Equal(t, []byte(``), j.(*BasicJob).Args)
+	assert.Equal(t, int32(0), j.(*BasicJob).ErrorCount)
+	assert.False(t, j.(*BasicJob).LastError.Valid)
 }
 
 func TestEnqueueWithPriority(t *testing.T) {
@@ -66,11 +66,11 @@ func testEnqueueWithPriority(t *testing.T, connPool adapter.ConnPool) {
 	require.NoError(t, err)
 
 	want := JobPriority(99)
-	job := Job{Type: "MyJob", Priority: want}
+	job := BasicJob{mType: "MyJob", mPriority: want}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
-	j, err := c.LockJobByID(ctx, job.ID)
+	j, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j)
 
@@ -97,11 +97,11 @@ func testEnqueueWithRunAt(t *testing.T, connPool adapter.ConnPool) {
 	require.NoError(t, err)
 
 	want := time.Now().Add(2 * time.Minute)
-	job := Job{Type: "MyJob", RunAt: want}
+	job := BasicJob{mType: "MyJob", mRunAt: want}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
-	j, err := c.LockJobByID(ctx, job.ID)
+	j, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j)
 
@@ -111,7 +111,7 @@ func testEnqueueWithRunAt(t *testing.T, connPool adapter.ConnPool) {
 	})
 
 	// truncate to the microsecond as postgres driver does
-	assert.WithinDuration(t, want, j.RunAt, time.Microsecond)
+	assert.WithinDuration(t, want, j.RunAt(), time.Microsecond)
 }
 
 func TestEnqueueWithArgs(t *testing.T) {
@@ -129,11 +129,11 @@ func testEnqueueWithArgs(t *testing.T, connPool adapter.ConnPool) {
 	require.NoError(t, err)
 
 	want := []byte(`{"arg1":0, "arg2":"a string"}`)
-	job := Job{Type: "MyJob", Args: want}
+	job := BasicJob{mType: "MyJob", Args: want}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
-	j, err := c.LockJobByID(ctx, job.ID)
+	j, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j)
 
@@ -142,7 +142,7 @@ func testEnqueueWithArgs(t *testing.T, connPool adapter.ConnPool) {
 		assert.NoError(t, err)
 	})
 
-	assert.Equal(t, want, j.Args)
+	assert.Equal(t, want, j.(*BasicJob).Args)
 }
 
 func TestEnqueueWithQueue(t *testing.T) {
@@ -160,11 +160,11 @@ func testEnqueueWithQueue(t *testing.T, connPool adapter.ConnPool) {
 	require.NoError(t, err)
 
 	want := "special-work-queue"
-	job := Job{Type: "MyJob", Queue: want}
+	job := BasicJob{mType: "MyJob", mQueue: want}
 	err = c.Enqueue(ctx, &job)
 	require.NoError(t, err)
 
-	j, err := c.LockJobByID(ctx, job.ID)
+	j, err := c.LockJobByID(ctx, job.ID())
 	require.NoError(t, err)
 	require.NotNil(t, j)
 
@@ -190,7 +190,7 @@ func testEnqueueWithEmptyType(t *testing.T, connPool adapter.ConnPool) {
 	c, err := NewClient(connPool)
 	require.NoError(t, err)
 
-	err = c.Enqueue(ctx, &Job{Type: ""})
+	err = c.Enqueue(ctx, &BasicJob{mType: ""})
 	require.Equal(t, ErrMissingType, err)
 }
 
@@ -211,7 +211,7 @@ func testEnqueueTx(t *testing.T, connPool adapter.ConnPool) {
 	tx, err := connPool.Begin(ctx)
 	require.NoError(t, err)
 
-	job := Job{Type: "MyJob"}
+	job := BasicJob{mType: "MyJob"}
 	err = c.EnqueueTx(ctx, &job, tx)
 	require.NoError(t, err)
 
@@ -242,7 +242,7 @@ func testEnqueueBatchTx(t *testing.T, connPool adapter.ConnPool) {
 	tx, err := connPool.Begin(ctx)
 	require.NoError(t, err)
 
-	err = c.EnqueueBatchTx(ctx, []*Job{{Type: "MyJob1"}, {Type: "MyJob2"}}, tx)
+	err = c.EnqueueBatchTx(ctx, []*BasicJob{{mType: "MyJob1"}, {mType: "MyJob2"}}, tx)
 	require.NoError(t, err)
 
 	j := findOneJob(t, tx)
