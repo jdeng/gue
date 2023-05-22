@@ -36,7 +36,33 @@ type Client struct {
 
 	entropy io.Reader
 
+	enqueuer JobEnqueuer
+	locker   JobLocker
+
 	mEnqueue metric.Int64Counter
+	mLockJob metric.Int64Counter
+}
+
+type JobEnqueuer interface {
+	Enqueue(ctx context.Context, j Job, q adapter.Queryable) error
+}
+
+type JobLocker interface {
+	LockJob(ctx context.Context, queue string) (Job, error)
+	LockNextScheduledJob(ctx context.Context, queue string) (Job, error)
+	LockJobByID(ctx context.Context, id string) (Job, error)
+}
+
+type BasicJobEnqueuer struct {
+	pool    adapter.ConnPool
+	entropy io.Reader
+}
+
+type BasicJobLocker struct {
+	pool    adapter.ConnPool
+	backoff Backoff
+	logger  adapter.Logger
+
 	mLockJob metric.Int64Counter
 }
 
@@ -55,6 +81,19 @@ func NewClient(pool adapter.ConnPool, options ...ClientOption) (*Client, error) 
 
 	for _, option := range options {
 		option(&instance)
+	}
+
+	if instance.enqueuer == nil {
+		instance.enqueuer = &BasicJobEnqueuer{pool: pool, entropy: instance.entropy}
+	}
+
+	if instance.locker == nil {
+		instance.locker = &BasicJobLocker{
+			pool:     pool,
+			backoff:  instance.backoff,
+			logger:   instance.logger,
+			mLockJob: instance.mLockJob,
+		}
 	}
 
 	instance.logger = instance.logger.With(adapter.F("client-id", instance.id))
@@ -112,7 +151,25 @@ func (c *Client) EnqueueBatchTx(ctx context.Context, jobs []*BasicJob, tx adapte
 	return nil
 }
 
-func (c *Client) execEnqueue(ctx context.Context, j *BasicJob, q adapter.Queryable) (err error) {
+func (c *Client) execEnqueue(ctx context.Context, j Job, q adapter.Queryable) (err error) {
+	err = c.enqueuer.Enqueue(ctx, j, q)
+	c.logger.Debug(
+		"Tried to enqueue a job",
+		adapter.Err(err),
+		adapter.F("queue", j.Queue()),
+		adapter.F("id", j.ID()),
+	)
+
+	c.mEnqueue.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.Type()), attrSuccess.Bool(err == nil)))
+	return err
+}
+
+func (jq *BasicJobEnqueuer) Enqueue(ctx context.Context, xj Job, q adapter.Queryable) (err error) {
+	j, ok := xj.(*BasicJob)
+	if !ok {
+		return errors.New("not a BasicJob")
+	}
+
 	if j.mType == "" {
 		return ErrMissingType
 	}
@@ -128,7 +185,7 @@ func (c *Client) execEnqueue(ctx context.Context, j *BasicJob, q adapter.Queryab
 		j.Args = []byte{}
 	}
 
-	if j.mID, err = ulid.New(ulid.Timestamp(now), c.entropy); err != nil {
+	if j.mID, err = ulid.New(ulid.Timestamp(now), jq.entropy); err != nil {
 		return fmt.Errorf("could not generate new Job ULID ID: %w", err)
 	}
 	_, err = q.Exec(ctx, `INSERT INTO gue_jobs
@@ -137,16 +194,17 @@ VALUES
 ($1, $2, $3, $4, $5, $6, $7, $7)
 `, j.ID(), j.mQueue, j.mPriority, j.mRunAt, j.mType, j.Args, now)
 
-	c.logger.Debug(
-		"Tried to enqueue a job",
-		adapter.Err(err),
-		adapter.F("queue", j.mQueue),
-		adapter.F("id", j.ID()),
-	)
-
-	c.mEnqueue.Add(ctx, 1, metric.WithAttributes(attrJobType.String(j.mType), attrSuccess.Bool(err == nil)))
-
 	return err
+}
+
+func (jq *BasicJobLocker) LockJob(ctx context.Context, queue string) (Job, error) {
+	sql := `SELECT job_id, queue, priority, run_at, job_type, args, error_count, last_error
+FROM gue_jobs
+WHERE queue = $1 AND run_at <= $2
+ORDER BY priority ASC
+LIMIT 1 FOR UPDATE SKIP LOCKED`
+
+	return jq.execLockJob(ctx, true, sql, queue, time.Now().UTC())
 }
 
 // LockJob attempts to retrieve a Job from the database in the specified queue.
@@ -163,13 +221,15 @@ VALUES
 // After the Job has been worked, you must call either Job.Done() or Job.Error() on it
 // in order to commit transaction to persist Job changes (remove or update it).
 func (c *Client) LockJob(ctx context.Context, queue string) (Job, error) {
-	sql := `SELECT job_id, queue, priority, run_at, job_type, args, error_count, last_error
-FROM gue_jobs
-WHERE queue = $1 AND run_at <= $2
-ORDER BY priority ASC
-LIMIT 1 FOR UPDATE SKIP LOCKED`
+	return c.locker.LockJob(ctx, queue)
+}
 
-	return c.execLockJob(ctx, true, sql, queue, time.Now().UTC())
+func (c *Client) LockNextScheduledJob(ctx context.Context, queue string) (Job, error) {
+	return c.locker.LockNextScheduledJob(ctx, queue)
+}
+
+func (c *Client) LockJobByID(ctx context.Context, id string) (Job, error) {
+	return c.locker.LockJobByID(ctx, id)
 }
 
 // LockJobByID attempts to retrieve a specific Job from the database.
@@ -182,7 +242,7 @@ LIMIT 1 FOR UPDATE SKIP LOCKED`
 //
 // After the Job has been worked, you must call either Job.Done() or Job.Error() on it
 // in order to commit transaction to persist Job changes (remove or update it).
-func (c *Client) LockJobByID(ctx context.Context, id string) (Job, error) {
+func (c *BasicJobLocker) LockJobByID(ctx context.Context, id string) (Job, error) {
 	sql := `SELECT job_id, queue, priority, run_at, job_type, args, error_count, last_error
 FROM gue_jobs
 WHERE job_id = $1 FOR UPDATE SKIP LOCKED`
@@ -203,7 +263,7 @@ WHERE job_id = $1 FOR UPDATE SKIP LOCKED`
 //
 // After the Job has been worked, you must call either Job.Done() or Job.Error() on it
 // in order to commit transaction to persist Job changes (remove or update it).
-func (c *Client) LockNextScheduledJob(ctx context.Context, queue string) (Job, error) {
+func (c *BasicJobLocker) LockNextScheduledJob(ctx context.Context, queue string) (Job, error) {
 	sql := `SELECT job_id, queue, priority, run_at, job_type, args, error_count, last_error
 FROM gue_jobs
 WHERE queue = $1 AND run_at <= $2
@@ -213,7 +273,7 @@ LIMIT 1 FOR UPDATE SKIP LOCKED`
 	return c.execLockJob(ctx, true, sql, queue, time.Now().UTC())
 }
 
-func (c *Client) execLockJob(ctx context.Context, handleErrNoRows bool, sql string, args ...any) (Job, error) {
+func (c *BasicJobLocker) execLockJob(ctx context.Context, handleErrNoRows bool, sql string, args ...any) (Job, error) {
 	tx, err := c.pool.Begin(ctx)
 	if err != nil {
 		c.mLockJob.Add(ctx, 1, metric.WithAttributes(attrJobType.String(""), attrSuccess.Bool(false)))
