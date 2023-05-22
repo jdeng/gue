@@ -37,3 +37,15 @@ func WithClientMeter(meter metric.Meter) ClientOption {
 		c.meter = meter
 	}
 }
+
+func WithJobLocker(jobLocker JobLocker) ClientOption {
+	return func(c *Client) {
+		c.locker = jobLocker
+	}
+}
+
+func WithJobEnqueuer(jobEnqueuer JobEnqueuer) ClientOption {
+	return func(c *Client) {
+		c.enqueuer = jobEnqueuer
+	}
+}

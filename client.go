@@ -47,6 +47,12 @@ type JobEnqueuer interface {
 	Enqueue(ctx context.Context, j Job, q adapter.Queryable) error
 }
 
+type NopJobEnqueuer struct{}
+
+func (n *NopJobEnqueuer) Enqueue(ctx context.Context, j Job, q adapter.Queryable) error {
+	return errors.New("not implemented")
+}
+
 type JobLocker interface {
 	LockJob(ctx context.Context, queue string) (Job, error)
 	LockNextScheduledJob(ctx context.Context, queue string) (Job, error)
