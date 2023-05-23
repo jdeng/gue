@@ -32,6 +32,7 @@ type Job interface {
 	RunAt() time.Time
 
 	Tx() adapter.Tx
+	Complete(ctx context.Context) error
 	Delete(ctx context.Context) error
 	Done(ctx context.Context) error
 	Error(ctx context.Context, err error) error
@@ -148,6 +149,10 @@ func (j *BasicJob) Done(ctx context.Context) error {
 	j.tx = nil
 
 	return nil
+}
+
+func (j *BasicJob) Complete(ctx context.Context) error {
+	return j.Delete(ctx)
 }
 
 // Error marks the job as failed and schedules it to be reworked. An error
